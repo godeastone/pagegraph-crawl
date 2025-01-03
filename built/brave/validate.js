@@ -1,7 +1,7 @@
 import * as fsLib from 'fs';
 import * as osLib from 'os';
 import * as pathLib from 'path';
-import which from 'which';
+import * as hasBinLib from 'hasbin';
 import { asHTTPUrl, isDir, isExecFile } from './checks.js';
 import { getLoggerForLevel } from './logging.js';
 const possibleBraveBinaryPaths = [
@@ -26,13 +26,11 @@ const guessBinary = () => {
         'brave-browser-stable',
         'brave-browser',
     ];
-    for (const aBinaryName of possibleBraveBinaryNames) {
-        const binaryPath = which.sync(aBinaryName, { nothrow: true });
-        if (binaryPath) {
-            return binaryPath;
-        }
+    const firstBraveBinary = hasBinLib.first.sync(possibleBraveBinaryNames);
+    if (firstBraveBinary === false) {
+        return false;
     }
-    return false;
+    return firstBraveBinary;
 };
 export const validate = (rawArgs) => {
     const logger = getLoggerForLevel(rawArgs.logging);
@@ -82,8 +80,6 @@ export const validate = (rawArgs) => {
     const userAgent = rawArgs.user_agent;
     const crawlDuplicates = rawArgs.crawl_duplicates;
     const screenshot = rawArgs.screenshot;
-    const storeHar = rawArgs.store_har;
-    const storeHarBody = rawArgs.store_har_body;
     const validatedArgs = {
         executablePath: String(executablePath),
         outputPath,
@@ -100,8 +96,6 @@ export const validate = (rawArgs) => {
         userAgent,
         crawlDuplicates,
         screenshot,
-        storeHar,
-        storeHarBody,
     };
     if (rawArgs.proxy_server !== undefined) {
         try {

@@ -5,7 +5,7 @@ Command line tool for crawling web pages with PageGraph.
 
 Install
 ---
-Requires a recent version of node (current testing is done on `v23.4.0`).
+For building/installing the tool, you need to have `tsc` (TypeScript Compiler) package installed.
 
 ```bash
 npm install
@@ -24,19 +24,14 @@ Usage
 Since [PageGraph](https://github.com/brave/brave-browser/wiki/PageGraph) is built as part of Brave Nightly, you can simply point the binary path to be your local installation.
 
 ```bash
-npm run crawl -- \
-    -b /Applications/Brave\ Browser\ Nightly.app/Contents/MacOS/Brave\ Browser\ Nightly \
-    -u https://brave.com \
-    -t 5 \
-    -o output/ \
-    --debug debug
+npm run crawl -- -b /Applications/Brave\ Browser\ Nightly.app/Contents/MacOS/Brave\ Browser\ Nightly -u https://brave.com -t 5 -o output/ --debug debug
 ```
 
-The `-t` specifies how many seconds to crawl the URL provided in `-u` using the PageGraph binary in `-b`.
+The `-t` specifies how many seconds to crawl the URL provided in `-u` using the PageGraph binary in `-b`. 
 
 You can see all supported options:
 ```bash
 npm run crawl -- -h
 ```
 
-**NOTE:** PageGraph currently does not track puppeteer / automation scripts, and so modifying or interacting with the document through [devtools/puppeteer](https://pptr.dev/) while recording a PageGraph file will likely fail.
+**NOTE:** PageGraph currently does not track puppeteer / automation scripts, and so modifying or interacting with the document through [devtools/puppeteer](https://pptr.dev/) while recording a PageGraph file will fail.

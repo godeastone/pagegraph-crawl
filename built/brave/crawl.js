@@ -2,12 +2,11 @@ import * as osLib from 'os';
 import Xvbf from 'xvfb';
 import { isTopLevelPageNavigation, isTimeoutError } from './checks.js';
 import { asHTTPUrl } from './checks.js';
-import { createScreenshotPath, writeGraphML, writeHAR, deleteAtPath } from './files.js';
+import { createScreenshotPath, writeGraphML, deleteAtPath } from './files.js';
 import { getLogger } from './logging.js';
 import { makeNavigationTracker } from './navigation_tracker.js';
 import { selectRandomChildUrl } from './page.js';
 import { puppeteerConfigForArgs, launchWithRetry } from './puppeteer.js';
-import { harFromMessages } from 'chrome-har';
 const xvfbPlatforms = new Set(['linux', 'openbsd']);
 const setupEnv = (args) => {
     const logger = getLogger(args);
@@ -54,46 +53,6 @@ const waitUntilUnless = (secs, unlessFunc, intervalMs = 500) => {
         }, intervalMs);
     });
 };
-const prepareHARGenerator = async (client, networkEvents, pageEvents, storeHarBody, responseBodies, logger) => {
-    await client.send('Page.enable');
-    await client.send('Network.enable');
-    const networkMethods = [
-        'Network.requestWillBeSent',
-        'Network.requestServedFromCache',
-        'Network.dataReceived',
-        'Network.responseReceived',
-        'Network.resourceChangedPriority',
-        'Network.loadingFinished',
-        'Network.loadingFailed',
-    ];
-    const pageMethods = [
-        'Page.loadEventFired',
-        'Page.domContentEventFired',
-        'Page.frameStartedLoading',
-        'Page.frameAttached',
-        'Page.frameScheduledNavigation',
-    ];
-    networkMethods.forEach((method) => {
-        client.on(method, (params) => {
-            networkEvents.push({ method, params });
-            if (storeHarBody && method == 'Network.loadingFinished') {
-                const responseParams = params;
-                const requestId = responseParams.requestId;
-                client.send('Network.getResponseBody', { requestId: requestId })
-                    .then((responseBody) => {
-                    responseBodies.set(requestId.toString(), responseBody);
-                }, (reason) => {
-                    logger.error('LoadingFinishedError: ' + reason);
-                });
-            }
-        });
-    });
-    pageMethods.forEach((method) => {
-        client.on(method, (params) => {
-            pageEvents.push({ method, params });
-        });
-    });
-};
 const generatePageGraph = async (seconds, page, client, waitFunc, 
 // eslint-disable-next-line max-len
 logger) => {
@@ -116,7 +75,7 @@ export const doCrawl = async (args, previouslySeenUrls) => {
     const depth = Math.max(args.recursiveDepth, 1);
     let randomChildUrl;
     let shouldRedirectToUrl;
-    const puppeteerConfig = await puppeteerConfigForArgs(args);
+    const puppeteerConfig = puppeteerConfigForArgs(args);
     const { launchOptions } = puppeteerConfig;
     const envHandle = setupEnv(args);
     let shouldStopWaitingFlag = false;
@@ -142,12 +101,6 @@ export const doCrawl = async (args, previouslySeenUrls) => {
             // and wait for idle time.
             const page = await browser.newPage();
             const client = await page.target().createCDPSession();
-            const networkEvents = [];
-            const pageEvents = [];
-            const responseBodies = new Map();
-            if (args.storeHar) {
-                await prepareHARGenerator(client, networkEvents, pageEvents, args.storeHarBody, responseBodies, logger);
-            }
             client.on('Target.targetCrashed', (event) => {
                 const logMsg = {
                     targetId: event.targetId,
@@ -182,8 +135,7 @@ export const doCrawl = async (args, previouslySeenUrls) => {
                     logger.info('Detected redirect to ', requestedUrl, ' so stopping page load and moving on');
                     shouldRedirectToUrl = requestedUrl;
                     shouldStopWaitingFlag = true;
-                    const client = await page.createCDPSession();
-                    await client.send('Page.stopLoading');
+                    await page._client.send('Page.stopLoading');
                     request.continue();
                     return;
                 }
@@ -194,10 +146,9 @@ export const doCrawl = async (args, previouslySeenUrls) => {
                 }
                 // Otherwise, we're in a redirect loop, so stop recording
                 // the pagegraph, but continue.
-                logger.info('Quitting bc we\'re in a redirect loop');
+                logger.error('Quitting bc we\'re in a redirect loop');
                 shouldStopWaitingFlag = true;
-                const client = await page.createCDPSession();
-                await client.send('Page.stopLoading');
+                await page._client.send('Page.stopLoading');
                 request.continue();
                 return;
             });
@@ -216,37 +167,6 @@ export const doCrawl = async (args, previouslySeenUrls) => {
             logger.info('Loaded ', String(urlToCrawl));
             const response = await generatePageGraph(args.seconds, page, client, shouldStopWaitingFunc, logger);
             await writeGraphML(args, urlToCrawl, response, logger);
-            // Store HAR
-            if (args.storeHar) {
-                logger.verbose('Beginning HAR export');
-                await Promise.all(responseBodies);
-                for (const event of networkEvents) {
-                    if (!args.storeHarBody) {
-                        break;
-                    }
-                    if (event.method !== 'Network.responseReceived') {
-                        continue;
-                    }
-                    const requestId = event.params.requestId;
-                    const responseBody = responseBodies.get(requestId.toString());
-                    const responseParams = event.params;
-                    if (!responseBody) {
-                        responseParams.response.body = undefined;
-                        continue;
-                    }
-                    const responseBodyEncoding = responseBody.base64Encoded
-                        ? 'base64'
-                        : undefined;
-                    const responseBodyBuffer = Buffer.from(responseBody.body, responseBodyEncoding);
-                    responseParams.response.body = responseBodyBuffer.toString();
-                }
-                const allEvents = pageEvents
-                    .concat(networkEvents);
-                const har = harFromMessages(allEvents, {
-                    includeTextFromResponseBody: args.storeHarBody,
-                });
-                await writeHAR(args, urlToCrawl, har, logger);
-            }
             if (depth > 1) {
                 randomChildUrl = await selectRandomChildUrl(page, logger);
             }

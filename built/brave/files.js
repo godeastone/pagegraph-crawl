@@ -1,6 +1,6 @@
-import { rm, writeFile, mkdtemp } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { writeFile } from 'node:fs/promises';
 import { join, parse } from 'node:path';
+import { remove } from 'fs-extra';
 import { isDir } from './checks.js';
 const createFilename = (url) => {
     const fileSafeUrl = String(url).replace(/[^\w]/g, '_');
@@ -12,11 +12,6 @@ const createGraphMLPath = (args, url) => {
         ? join(args.outputPath, createFilename(url))
         : args.outputPath;
 };
-const createHARPath = (args, url) => {
-    const outputPath = createGraphMLPath(args, url);
-    const pathParts = parse(outputPath);
-    return pathParts.dir + '/' + pathParts.name + '.har';
-};
 export const createScreenshotPath = (args, url) => {
     const outputPath = createGraphMLPath(args, url);
     const pathParts = parse(outputPath);
@@ -25,29 +20,13 @@ export const createScreenshotPath = (args, url) => {
 export const writeGraphML = async (args, url, response, logger) => {
     try {
         const outputFilename = createGraphMLPath(args, url);
-        logger.info('Writing PageGraph file to: ', outputFilename);
         await writeFile(outputFilename, response.data);
+        logger.info('Writing PageGraph file to: ', outputFilename);
     }
     catch (err) {
         logger.error('saving Page.generatePageGraph output: ', String(err));
     }
 };
-export const writeHAR = async (args, url, har, logger) => {
-    try {
-        const outputFilename = createHARPath(args, url);
-        logger.info('Writing HAR file to: ', outputFilename);
-        await writeFile(outputFilename, JSON.stringify(har, null, 4));
-    }
-    catch (err) {
-        logger.error('saving HAR file: ', String(err));
-    }
-};
 export const deleteAtPath = async (path) => {
-    await rm(path, {
-        recursive: true,
-        force: true,
-    });
-};
-export const createTempDir = async (dirPrefix = 'pagegraph-crawl-') => {
-    return await mkdtemp(join(tmpdir(), dirPrefix));
+    await remove(path);
 };

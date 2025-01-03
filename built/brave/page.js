@@ -20,7 +20,7 @@ const selectRandomChildUrl = async (page, logger) => {
             }
             links.push(hrefUrl);
         }
-        catch (ignore) {
+        catch (_) {
             continue;
         }
     }

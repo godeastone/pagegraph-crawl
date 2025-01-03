@@ -5,48 +5,11 @@ import type { CDPSession, HTTPRequest, Page } from 'puppeteer-core'
 
 import { isTopLevelPageNavigation, isTimeoutError } from './checks.js'
 import { asHTTPUrl } from './checks.js'
-import { createScreenshotPath, writeGraphML, writeHAR, deleteAtPath } from './files.js'
+import { createScreenshotPath, writeGraphML, deleteAtPath } from './files.js'
 import { getLogger } from './logging.js'
 import { makeNavigationTracker } from './navigation_tracker.js'
 import { selectRandomChildUrl } from './page.js'
 import { puppeteerConfigForArgs, launchWithRetry } from './puppeteer.js'
-
-import type { Protocol } from 'devtools-protocol'
-import { harFromMessages } from 'chrome-har'
-
-interface ExtendedResponse extends Protocol.Network.Response {
-  body?: string
-}
-
-interface ExtendedResponseReceivedEvent extends
-  Protocol.Network.ResponseReceivedEvent {
-  response: ExtendedResponse
-}
-
-interface Event<TMethod, TParams> {
-  method: TMethod
-  params: TParams
-}
-
-type NetworkEventParams =
-  | Protocol.Network.RequestWillBeSentEvent
-  | Protocol.Network.RequestServedFromCacheEvent
-  | Protocol.Network.DataReceivedEvent
-  | Protocol.Network.ResponseReceivedEvent
-  | Protocol.Network.ResourceChangedPriorityEvent
-  | Protocol.Network.LoadingFinishedEvent
-  | Protocol.Network.LoadingFailedEvent
-
-type NetworkEvent = Event<string, NetworkEventParams>
-
-type PageEventParams =
-  | Protocol.Page.LoadEventFiredEvent
-  | Protocol.Page.DomContentEventFiredEvent
-  | Protocol.Page.FrameStartedLoadingEvent
-  | Protocol.Page.FrameAttachedEvent
-  | Protocol.Page.FrameScheduledNavigationEvent
-
-type PageEvent = Event<string, PageEventParams>
 
 type CDPSessionType = typeof CDPSession
 type HTTPRequestType = typeof HTTPRequest
@@ -107,58 +70,6 @@ const waitUntilUnless = (secs: number,
   })
 }
 
-type ResponseBodies = Map<string, Protocol.Network.GetResponseBodyResponse>
-
-const prepareHARGenerator = async (client: CDPSessionType,
-                                   networkEvents: NetworkEvent[],
-                                   pageEvents: PageEvent[],
-                                   storeHarBody: boolean,
-                                   responseBodies: ResponseBodies,
-                                   logger: Logger) => {
-  await client.send('Page.enable')
-  await client.send('Network.enable')
-
-  const networkMethods = [
-    'Network.requestWillBeSent',
-    'Network.requestServedFromCache',
-    'Network.dataReceived',
-    'Network.responseReceived',
-    'Network.resourceChangedPriority',
-    'Network.loadingFinished',
-    'Network.loadingFailed',
-  ]
-
-  const pageMethods = [
-    'Page.loadEventFired',
-    'Page.domContentEventFired',
-    'Page.frameStartedLoading',
-    'Page.frameAttached',
-    'Page.frameScheduledNavigation',
-  ]
-
-  networkMethods.forEach((method) => {
-    client.on(method, (params: NetworkEventParams) => {
-      networkEvents.push({ method, params })
-      if (storeHarBody && method == 'Network.loadingFinished') {
-        const responseParams = params as ExtendedResponseReceivedEvent
-        const requestId = responseParams.requestId
-        client.send('Network.getResponseBody', { requestId: requestId })
-          .then((responseBody: Protocol.Network.GetResponseBodyResponse) => {
-            responseBodies.set(requestId.toString(), responseBody)
-          }, (reason: any) => {
-            logger.error('LoadingFinishedError: ' + reason)
-          })
-      }
-    })
-  })
-
-  pageMethods.forEach((method) => {
-    client.on(method, (params: PageEventParams) => {
-      pageEvents.push({ method, params })
-    })
-  })
-}
-
 const generatePageGraph = async (seconds: number,
                                  page: PageType,
                                  client: CDPSessionType,
@@ -190,7 +101,7 @@ export const doCrawl = async (args: CrawlArgs,
   let randomChildUrl: URL | undefined
   let shouldRedirectToUrl: URL | undefined
 
-  const puppeteerConfig = await puppeteerConfigForArgs(args)
+  const puppeteerConfig = puppeteerConfigForArgs(args)
   const { launchOptions } = puppeteerConfig
   const envHandle = setupEnv(args)
 
@@ -222,21 +133,6 @@ export const doCrawl = async (args: CrawlArgs,
       // and wait for idle time.
       const page = await browser.newPage()
       const client = await page.target().createCDPSession()
-
-      const networkEvents: NetworkEvent[] = []
-      const pageEvents: PageEvent[] = []
-      const responseBodies = new Map<any, any>()
-      if (args.storeHar) {
-        await prepareHARGenerator(
-          client,
-          networkEvents,
-          pageEvents,
-          args.storeHarBody,
-          responseBodies,
-          logger,
-        )
-      }
-
       client.on('Target.targetCrashed', (event: TargetCrashedEvent) => {
         const logMsg = {
           targetId: event.targetId,
@@ -279,8 +175,7 @@ export const doCrawl = async (args: CrawlArgs,
                       ' so stopping page load and moving on')
           shouldRedirectToUrl = requestedUrl
           shouldStopWaitingFlag = true
-          const client = await page.createCDPSession()
-          await client.send('Page.stopLoading')
+          await page._client.send('Page.stopLoading')
           request.continue()
           return
         }
@@ -294,10 +189,9 @@ export const doCrawl = async (args: CrawlArgs,
 
         // Otherwise, we're in a redirect loop, so stop recording
         // the pagegraph, but continue.
-        logger.info('Quitting bc we\'re in a redirect loop')
+        logger.error('Quitting bc we\'re in a redirect loop')
         shouldStopWaitingFlag = true
-        const client = await page.createCDPSession()
-        await client.send('Page.stopLoading')
+        await page._client.send('Page.stopLoading')
         request.continue()
         return
       })
@@ -319,46 +213,6 @@ export const doCrawl = async (args: CrawlArgs,
       const response = await generatePageGraph(args.seconds, page, client,
                                                shouldStopWaitingFunc, logger)
       await writeGraphML(args, urlToCrawl, response, logger)
-
-      // Store HAR
-      if (args.storeHar) {
-        logger.verbose('Beginning HAR export')
-        await Promise.all(responseBodies)
-
-        for (const event of networkEvents) {
-          if (!args.storeHarBody) {
-            break
-          }
-
-          if (event.method !== 'Network.responseReceived') {
-            continue
-          }
-
-          const requestId = event.params.requestId
-          const responseBody = responseBodies.get(requestId.toString())
-          const responseParams = event.params as ExtendedResponseReceivedEvent
-
-          if (!responseBody) {
-            responseParams.response.body = undefined
-            continue
-          }
-
-          const responseBodyEncoding = responseBody.base64Encoded
-            ? 'base64'
-            : undefined
-          const responseBodyBuffer = Buffer.from(responseBody.body,
-                                                 responseBodyEncoding)
-          responseParams.response.body = responseBodyBuffer.toString()
-        }
-
-        const allEvents = (pageEvents as (PageEvent | NetworkEvent)[])
-          .concat(networkEvents)
-        const har = harFromMessages(allEvents, {
-          includeTextFromResponseBody: args.storeHarBody,
-        })
-        await writeHAR(args, urlToCrawl, har, logger)
-      }
-
       if (depth > 1) {
         randomChildUrl = await selectRandomChildUrl(page, logger)
       }

@@ -1,6 +1,4 @@
-// This eslint config is used for checking the typescript in the project
-// (e.g., src/*). The other eslint config file (eslint-neostandard.config.js)
-// is used for linting the code in this project written in JS (e.g., test/*.js).
+// @ts-check
 
 import eslint from '@eslint/js'
 import tseslint from 'typescript-eslint'
@@ -18,12 +16,6 @@ export default tseslint.config(
       }],
       '@typescript-eslint/no-explicit-any': 'off',
       '@typescript-eslint/no-empty-function': 'off',
-      '@typescript-eslint/no-unused-vars': ['error', {
-        "caughtErrorsIgnorePattern": "ignore"
-      }],
-      'camelcase': ['error', {
-        'properties': 'never'
-      }]
     }
   },
   {

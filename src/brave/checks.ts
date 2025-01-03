@@ -4,6 +4,8 @@ import { existsSync, lstatSync, statSync, constants } from 'node:fs'
 import { join, sep } from 'node:path'
 
 import type { HTTPRequest } from 'puppeteer-core'
+import puppeteerLib from 'puppeteer-core'
+const TimeoutError = puppeteerLib.errors.TimeoutError
 
 type HTTPRequestType = typeof HTTPRequest
 
@@ -24,7 +26,7 @@ export const asHTTPUrl = (possibleUrl: string | URL,
 
     return url
   }
-  catch (ignore) {
+  catch (e) {
     return undefined
   }
 }
@@ -74,6 +76,10 @@ export const isTopLevelPageNavigation = (request: HTTPRequestType): boolean => {
 }
 
 export const isTimeoutError = (error: any): boolean => {
+  if (error instanceof TimeoutError) {
+    return true
+  }
+
   if (typeof error.name !== 'string') {
     return false
   }
